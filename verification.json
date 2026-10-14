@@ -1,0 +1,28 @@
+{
+  "stats": {
+    "asset": {
+      "meshes": 34,
+      "triangles": 153872,
+      "materials": 3
+    },
+    "runtime": {
+      "calls": 74,
+      "geometryCalls": 36,
+      "bloomCalls": 35,
+      "postPasses": 3,
+      "bloomEnabled": true,
+      "triangles": 154786,
+      "shadowPassesExcluded": true
+    }
+  },
+  "noShadow": {
+    "calls": 72,
+    "geometryCalls": 35,
+    "bloomCalls": 34,
+    "postPasses": 3,
+    "bloomEnabled": true,
+    "triangles": 154728,
+    "shadowPassesExcluded": true
+  },
+  "errors": []
+}

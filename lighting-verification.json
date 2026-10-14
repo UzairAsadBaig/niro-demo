@@ -1,0 +1,28 @@
+{
+  "on": {
+    "runtime": {
+      "calls": 82,
+      "geometryCalls": 40,
+      "bloomCalls": 39,
+      "postPasses": 3,
+      "bloomEnabled": true,
+      "triangles": 155186,
+      "shadowPassesExcluded": true
+    },
+    "sources": [
+      "Lamp_bulb_cores",
+      "Street_lamps_instanced",
+      "cyan marker"
+    ]
+  },
+  "off": {
+    "calls": 41,
+    "geometryCalls": 40,
+    "bloomCalls": 0,
+    "postPasses": 1,
+    "bloomEnabled": false,
+    "triangles": 155186,
+    "shadowPassesExcluded": true
+  },
+  "errors": []
+}
