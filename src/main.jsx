@@ -1,17 +1,20 @@
 import React, { Component, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Canvas, useFrame, useThree } from '@react-three/fiber';
-import { OrbitControls, useGLTF, useProgress } from '@react-three/drei';
+import { useGLTF, useProgress } from '@react-three/drei';
 import * as THREE from 'three';
+import Lenis from 'lenis';
+import 'lenis/dist/lenis.css';
 import './style.css';
 import { SCENE_CONFIG } from './scene-config';
-// Street lights were placed for the old city model; disabled until they're re-placed for the new one.
-// import { StreetLighting } from './StreetLighting.jsx';
 import { Atmosphere, CityEnvironment } from './Atmosphere.jsx';
 import { NiroLogo } from './NiroLogo.jsx';
+import { SignalStreams } from './SignalStreams.jsx';
+import { Places } from './Places.jsx';
+import { MODEL, STAGES, story, clamp01 } from './story';
 
-const MODEL = window.__CITY_MODEL_URL || '/dark-city.glb';
-const VIEWS = SCENE_CONFIG.cameras;
+const DEV = new URLSearchParams(location.search).has('dev');
+const KEYS = SCENE_CONFIG.camera.keys;
 
 class SceneBoundary extends Component {
   state = { error: null };
@@ -34,12 +37,12 @@ function City({ onReady, wireframe }) {
       meshes++;
       triangles += (object.geometry.index?.count ?? object.geometry.attributes.position.count) / 3 * (object.isInstancedMesh ? object.count : 1);
       materials.add(object.material);
-      if(object.material.name.startsWith('FACADE'))object.material.emissiveIntensity=SCENE_CONFIG.lighting.windowEmission;
-      if(object.material.name.startsWith('CITY'))object.material.emissiveIntensity=SCENE_CONFIG.lighting.propEmission;
-      // Replace the broad baked lighting layer; preserve base color, normals and roughness.
-      if(object.material.name.startsWith('GROUND'))object.material.emissiveIntensity=0;
-      // New model: road-lamp heads. Warm them up and let the bloom pass pick them up.
-      if(object.material.name==='Emission'){object.material.emissive.set(SCENE_CONFIG.lighting.lampColor);object.material.emissiveIntensity=SCENE_CONFIG.lighting.lampEmission;object.userData.bloom=true;}
+      for (const m of [object.material].flat()) {
+        // Emission strength per designer material (scene-config `emission`); lamps get the warm lamp colour.
+        if (m.name in SCENE_CONFIG.emission) m.emissiveIntensity = SCENE_CONFIG.emission[m.name];
+        if (m.name in SCENE_CONFIG.emissionColor) m.emissive.set(SCENE_CONFIG.emissionColor[m.name]);
+        if (m.name === 'Emission') { m.emissive.set(SCENE_CONFIG.lighting.lampColor); object.userData.bloom = true; }
+      }
       object.castShadow = object.name !== 'Roads_and_paving';
       object.receiveShadow = true;
       object.updateMatrix();
@@ -67,55 +70,63 @@ function City({ onReady, wireframe }) {
   return <primitive object={scene} dispose={null} />;
 }
 
-const UP = new THREE.Vector3(0, 1, 0);
-function CameraRig({ view, resetToken, autoRotate, onCamera }) {
-  const controls = useRef(), pointer = useRef([0, 0]), sway = useRef([0, 0]);
-  const { camera, invalidate } = useThree();
-  const transition = useRef(null), lastReport = useRef(0);
-  useEffect(() => {
-    const preset=VIEWS[view];
-    transition.current={from:camera.position.clone(),fromTarget:controls.current?.target.clone()||new THREE.Vector3(...preset.target),fromFov:camera.fov,elapsed:0,preset};
-    invalidate();
-  },[view,resetToken,camera,invalidate]);
-  useEffect(()=>{
-    if(!SCENE_CONFIG.lockCamera||matchMedia('(prefers-reduced-motion: reduce)').matches)return;
-    const move=e=>{pointer.current=[e.clientX/innerWidth*2-1,1-e.clientY/innerHeight*2];invalidate();},leave=()=>{pointer.current=[0,0];invalidate();};
-    window.addEventListener('pointermove',move);document.addEventListener('mouseleave',leave);
-    return()=>{window.removeEventListener('pointermove',move);document.removeEventListener('mouseleave',leave);};
-  },[invalidate]);
-  useFrame((state,delta)=>{
-    if(!controls.current)return;
-    if(transition.current){
-      const t=transition.current;t.elapsed+=delta;let x=Math.min(1,t.elapsed/t.preset.duration);
-      const a=t.preset.easing==='cubicInOut'?(x<.5?4*x*x*x:1-Math.pow(-2*x+2,3)/2):x;
-      camera.position.lerpVectors(t.from,new THREE.Vector3(...t.preset.position),a);
-      controls.current.target.lerpVectors(t.fromTarget,new THREE.Vector3(...t.preset.target),a);
-      camera.fov=THREE.MathUtils.lerp(t.fromFov,t.preset.fov,a);camera.updateProjectionMatrix();controls.current.update();
-      if(x===1)transition.current=null;invalidate();
-    }else if(SCENE_CONFIG.lockCamera){
-      // Locked view: the camera follows the cursor a little while keeping its aim, so the city shifts the opposite way (parallax).
-      const P=SCENE_CONFIG.parallax,s=sway.current,p=pointer.current,k=1-Math.exp(-delta*P.ease);
-      s[0]+=(p[0]-s[0])*k;s[1]+=(p[1]-s[1])*k;
-      const base=new THREE.Vector3(...VIEWS[view].position),target=controls.current.target,forward=target.clone().sub(base);
-      const right=forward.clone().cross(UP).normalize(),up=right.clone().cross(forward).normalize();
-      camera.position.copy(base).addScaledVector(right,s[0]*P.x).addScaledVector(up,s[1]*P.y);camera.lookAt(target);
-      if(Math.abs(p[0]-s[0])+Math.abs(p[1]-s[1])>1e-4)invalidate();
-    }
-    if(autoRotate)invalidate();
-    const marker=new THREE.Vector3(...SCENE_CONFIG.marker.position).project(camera);
-    const data={position:camera.position.toArray().map(n=>+n.toFixed(3)),lookAt:controls.current.target.toArray().map(n=>+n.toFixed(3)),fov:+camera.fov.toFixed(2),markerScreen:[+(50+marker.x*50).toFixed(1),+(50-marker.y*50).toFixed(1)]};
-    window.__cityCamera=data;
-    if(state.clock.elapsedTime-lastReport.current>.15){onCamera(data);lastReport.current=state.clock.elapsedTime;}
-  });
-  return <OrbitControls ref={controls} makeDefault enabled={!SCENE_CONFIG.lockCamera} target={VIEWS[SCENE_CONFIG.startView].target} minDistance={8} maxDistance={300} minPolarAngle={.08} maxPolarAngle={Math.PI/2-.035} enableDamping dampingFactor={.07} autoRotate={autoRotate} autoRotateSpeed={.25} onStart={()=>{transition.current=null;}} />;
+// Story time → curve parameter: a monotone cubic (Fritsch–Carlson) through the key times, so the camera passes
+// each key with its momentum instead of easing to a stop there.
+function keyParam(s) {
+  const t = KEYS.map(k => k.s), n = t.length;
+  if (s <= t[0]) return 0;
+  if (s >= t[n - 1]) return 1;
+  let i = 0;
+  while (s > t[i + 1]) i++;
+  const h = t[i + 1] - t[i], x = (s - t[i]) / h;
+  const slope = j => j === 0 ? 1 / (t[1] - t[0]) : j === n - 1 ? 1 / (t[n - 1] - t[n - 2]) : 2 / (t[j + 1] - t[j - 1]);
+  const m0 = Math.min(slope(i), 3 / h), m1 = Math.min(slope(i + 1), 3 / h);
+  return (i + (3 - 2 * x) * x * x + (x * x * x - 2 * x * x + x) * h * m0 + (x * x * x - x * x) * h * m1) / (n - 1);
 }
-function UserMarker(){
- const m=SCENE_CONFIG.marker;
- return <group position={m.position}>
-  {[m.radius,m.radius*1.65].map((r,i)=><mesh userData={{ bloom: true }} key={r} rotation={[-Math.PI/2,0,0]} position={[0,i*.005,0]}><ringGeometry args={[r-.025,r+.025,80]}/><meshBasicMaterial color={m.color} toneMapped={false}/></mesh>)}
-  <mesh userData={{ bloom: true }} rotation={[-Math.PI/2,0,0]} position={[0,.012,0]}><circleGeometry args={[.23,32]}/><meshBasicMaterial color={m.color} toneMapped={false}/></mesh>
-  <mesh userData={{ bloom: true }} position={[0,m.beamHeight/2,0]}><cylinderGeometry args={[.025,.045,m.beamHeight,12]}/><meshBasicMaterial color={m.color} transparent opacity={.7} toneMapped={false}/></mesh>
- </group>;
+
+// One camera rig on the scroll timeline: position, target, FOV and mobile pull-back all follow Catmull-Rom curves
+// through the keys; portrait screens pull back along the view line, and the cursor adds a little parallax.
+const UP = new THREE.Vector3(0, 1, 0);
+function CameraRig({ onCamera }) {
+  const { camera } = useThree();
+  const pointer = useRef([0, 0]), sway = useRef([0, 0]), lastReport = useRef(0);
+  const rig = useMemo(() => ({
+    position: new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(...k.position)), false, 'centripetal'),
+    target: new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(...k.target)), false, 'centripetal'),
+    mobileTarget: new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(...(k.mobileTarget || k.target))), false, 'centripetal'),
+    // x = FOV, y = mobile pull-back distance.
+    lens: new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(k.fov, k.mobileDistance || SCENE_CONFIG.camera.mobile.distance, 0))),
+    optics: new THREE.Vector3(),
+    base: new THREE.Vector3(), aim: new THREE.Vector3(), view: new THREE.Vector3(), stageOne: new THREE.Vector3(...KEYS[1].position).distanceTo(new THREE.Vector3(...KEYS[1].target)),
+  }), []);
+  useEffect(() => {
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const move = e => { pointer.current = [e.clientX / innerWidth * 2 - 1, 1 - e.clientY / innerHeight * 2]; }, leave = () => { pointer.current = [0, 0]; };
+    window.addEventListener('pointermove', move); document.addEventListener('mouseleave', leave);
+    return () => { window.removeEventListener('pointermove', move); document.removeEventListener('mouseleave', leave); };
+  }, []);
+  useFrame((state, delta) => {
+    const s = story.s, param = keyParam(s);
+    rig.position.getPoint(param, rig.base); rig.target.getPoint(param, rig.aim); rig.lens.getPoint(param, rig.optics);
+    let fov = rig.optics.x;
+    if (camera.aspect < 1) {
+      const view = rig.view.subVectors(rig.base, rig.aim).multiplyScalar(rig.optics.y);
+      rig.mobileTarget.getPoint(param, rig.aim); rig.base.copy(rig.aim).add(view); fov += SCENE_CONFIG.camera.mobile.fov;
+    }
+    const P = SCENE_CONFIG.parallax, sw = sway.current, p = pointer.current, k = 1 - Math.exp(-delta * P.ease);
+    sw[0] += (p[0] - sw[0]) * k; sw[1] += (p[1] - sw[1]) * k;
+    const forward = rig.aim.clone().sub(rig.base), scale = forward.length() / rig.stageOne;
+    const right = forward.clone().cross(UP).normalize(), up = right.clone().cross(forward).normalize();
+    camera.position.copy(rig.base).addScaledVector(right, sw[0] * P.x * scale).addScaledVector(up, sw[1] * P.y * scale);
+    camera.lookAt(rig.aim);
+    if (camera.fov !== fov) { camera.fov = fov; camera.updateProjectionMatrix(); }
+    (camera.userData.target ||= new THREE.Vector3()).copy(rig.aim);
+    if (state.clock.elapsedTime - lastReport.current > .15) {
+      const data = { s:+s.toFixed(3), position:camera.position.toArray().map(n => +n.toFixed(2)), lookAt:rig.aim.toArray().map(n => +n.toFixed(2)), fov:+fov.toFixed(1) };
+      window.__cityCamera = data; onCamera(data); lastReport.current = state.clock.elapsedTime;
+    }
+  });
+  return null;
 }
 
 function Lighting({ exposure, shadows, mode }) {
@@ -158,62 +169,95 @@ function Metrics({ onStats }) {
 function Loading({ ready }) {
   const { progress, errors } = useProgress();
   if (ready) return null;
-  return <div className="loading" role="status"><div className="loading-card"><span className="eyebrow">ENTERING THE CITY</span><h2>{errors.length ? 'Model unavailable' : 'Bringing the neighborhood to life'}</h2><div className="progress"><i style={{ width: `${Math.max(4, progress)}%` }} /></div><p>{errors.length ? 'Check that public/dark-city.glb exists, then reload.' : 'Loading geometry and embedded textures…'}</p></div></div>;
+  return <div className="loading" role="status"><div className="loading-card"><span className="eyebrow">NIRO</span><h2>{errors.length ? 'Model unavailable' : 'Bringing the neighborhood to life'}</h2><div className="progress"><i style={{ width: `${Math.max(4, progress)}%` }} /></div><p>{errors.length ? 'Check that public/dark-city.glb exists, then reload.' : 'Loading the city…'}</p></div></div>;
 }
 
 function App() {
-  const [view, setView] = useState(SCENE_CONFIG.startView);
   const [ready, setReady] = useState(null);
   const [stats, setStats] = useState({ calls: 0, triangles: 0 });
-  const [autoRotate, setAutoRotate] = useState(false);
   const [wireframe, setWireframe] = useState(false);
   const [shadows, setShadows] = useState(true);
   const [mode, setMode] = useState('night');
   const [exposure, setExposure] = useState(SCENE_CONFIG.lighting.exposure);
   const [fogStrength, setFogStrength] = useState(SCENE_CONFIG.atmosphere.strength);
-  const [resetToken, setResetToken] = useState(0);
   const [settings, setSettings] = useState(false);
   const [bloomEnabled,setBloomEnabled]=useState(true);
   const [logoBloom,setLogoBloom]=useState(SCENE_CONFIG.logo.bloom.intensity),[logoBloomRadius,setLogoBloomRadius]=useState(SCENE_CONFIG.logo.bloom.radius);
   const [debug,setDebug]=useState(false),[cameraData,setCameraData]=useState(null);
+  const [chapter, setChapter] = useState(0), [covered, setCovered] = useState(false), [cue, setCue] = useState('start');
+  const track = useRef(), landing = useRef(), fill = useRef(), lenis = useRef();
   const onCamera=useCallback(data=>setCameraData(data),[]);
   useEffect(()=>{const key=e=>{if(/INPUT|SELECT|TEXTAREA/.test(e.target.tagName)||e.ctrlKey||e.metaKey||e.altKey)return;
-    if(e.key==='4'){setView('concept');setResetToken(n=>n+1);}
     if(e.key.toLowerCase()==='b')setBloomEnabled(v=>!v);
     if(e.key.toLowerCase()==='d')setDebug(v=>!v);
   };window.addEventListener('keydown',key);return()=>window.removeEventListener('keydown',key);},[]);
+  // Scroll position → story time. Lenis smooths the scroll itself (wheel and touch), so story time follows it directly.
+  // The track is STAGES × scrollPerStage viewports tall; the landing page follows it.
+  useEffect(() => {
+    if (!matchMedia('(prefers-reduced-motion: reduce)').matches) lenis.current = new Lenis({ autoRaf:true, lerp:SCENE_CONFIG.story.lerp });
+    const update = () => {
+      const max = track.current.offsetHeight - innerHeight, target = clamp01(scrollY / max) * STAGES;
+      story.s = target;
+      setChapter(Math.min(STAGES - 1, Math.floor(target)));
+      setCue(target < .25 ? 'start' : target > STAGES - .45 && target < STAGES + .01 ? 'end' : '');
+      fill.current?.style.setProperty('--progress', target / STAGES);
+      setCovered(landing.current.getBoundingClientRect().top < -innerHeight * .5);
+    };
+    addEventListener('scroll', update, { passive:true }); addEventListener('resize', update); update();
+    return () => { removeEventListener('scroll', update); removeEventListener('resize', update); lenis.current?.destroy(); };
+  }, []);
+  const scrollToTarget = target => lenis.current ? lenis.current.scrollTo(target, { duration:2.2 }) : (typeof target === 'number' ? scrollTo({ top:target }) : target.scrollIntoView());
+  const goTo = i => scrollToTarget((i + .6) / STAGES * (track.current.offsetHeight - innerHeight));
   const onReady = useCallback(data => { setReady(data); window.__cityReady = true; }, []);
+  const stages = SCENE_CONFIG.story.stages;
   return <main>
-    <SceneBoundary>
-      <Canvas shadows frameloop="demand" dpr={[1, 1.5]} camera={{ position: VIEWS[SCENE_CONFIG.startView].position, fov: VIEWS[SCENE_CONFIG.startView].fov, near: 0.5, far: 420 }}
-        gl={{ antialias: true, powerPreference: 'high-performance', toneMapping: THREE.ACESFilmicToneMapping }}
-        onCreated={({ gl }) => { gl.outputColorSpace = THREE.SRGBColorSpace; gl.shadowMap.type = THREE.PCFSoftShadowMap; }}
-        fallback={<div className="error-panel"><h2>WebGL is unavailable</h2><p>Open this scene in a browser with hardware acceleration enabled.</p></div>}>
-        <Lighting exposure={exposure} shadows={shadows} mode={mode} />
-        <CityEnvironment />
-        {/* <StreetLighting mode={mode} /> */}
-        <Suspense fallback={null}><City onReady={onReady} wireframe={wireframe} /></Suspense>
-        <CameraRig view={view} resetToken={resetToken} autoRotate={autoRotate} onCamera={onCamera} />
-        {view==='concept' && <UserMarker />}
-        {view==='concept' && <Suspense fallback={null}><NiroLogo play={!!ready} /></Suspense>}
-        <Metrics onStats={setStats} />
-        <Atmosphere strength={fogStrength} mode={mode} bloomEnabled={bloomEnabled} logoBloom={logoBloom} logoBloomRadius={logoBloomRadius} />
-      </Canvas>
-    </SceneBoundary>
-    {debug && <pre className="camera-debug" data-testid="camera-debug">{JSON.stringify(cameraData,null,2)}</pre>}
-    <header><div className="brand"><span className="brand-mark">D<span>•</span>C</span><div><strong>DARK CITY</strong><span>NEIGHBORHOOD EXPLORER</span></div></div><span className="live"><i />{ready ? 'LIVE 3D' : 'LOADING'}</span></header>
-    <section className="intro"><span className="eyebrow">AFTER HOURS / A LOCAL WORLD</span><h1>{VIEWS[view].label}<span>.</span></h1><p>{VIEWS[view].description}</p></section>
-    <aside className="tools"><button aria-expanded={settings} onClick={() => setSettings(s => !s)} className={settings ? 'active' : ''}>◐ <span>Scene settings</span></button>
-      {settings && <div className="settings"><div className="setting-heading">MAKE IT YOUR VIEW</div><label>Light <select value={mode} onChange={e => setMode(e.target.value)}><option value="night">Blue hour</option><option value="day">Daylight</option></select></label><label className="range-label">Exposure <span>{exposure.toFixed(2)}</span><input aria-label="Exposure" type="range" min="0.5" max="2.5" step="0.05" value={exposure} onChange={e => setExposure(Number(e.target.value))} /></label><label className="range-label">Surrounding fog <span>{fogStrength.toFixed(2)}</span><input aria-label="Surrounding fog" type="range" min="0" max="2" step="0.05" value={fogStrength} onChange={e => setFogStrength(Number(e.target.value))} /></label><label>Soft shadows <input type="checkbox" checked={shadows} onChange={e => setShadows(e.target.checked)} /></label><label>Bloom (B)<input type="checkbox" checked={bloomEnabled} onChange={e=>setBloomEnabled(e.target.checked)}/></label><label className="range-label">Logo bloom <span>{logoBloom.toFixed(2)}</span><input aria-label="Logo bloom" type="range" min="0" max="1.5" step=".01" value={logoBloom} onChange={e=>setLogoBloom(+e.target.value)}/></label><label className="range-label">Logo bloom spread <span>{logoBloomRadius.toFixed(2)}</span><input aria-label="Logo bloom spread" type="range" min="0" max="1" step=".01" value={logoBloomRadius} onChange={e=>setLogoBloomRadius(+e.target.value)}/></label><label>Camera debug (D)<input type="checkbox" checked={debug} onChange={e=>setDebug(e.target.checked)}/></label><label>Wireframe <input type="checkbox" checked={wireframe} onChange={e => setWireframe(e.target.checked)} /></label><p>One shadow-casting light. Static city geometry stays batched.</p></div>}
-    </aside>
-    <footer>{SCENE_CONFIG.showViewTabs && <nav aria-label="Camera views">{Object.entries(VIEWS).map(([key], i) => <button key={key} aria-pressed={view === key} className={view === key ? 'selected' : ''} onClick={() => setView(key)}><span>0{i + 1}</span>{VIEWS[key].button}</button>)}</nav>}{!SCENE_CONFIG.lockCamera && <div className="playback"><button aria-label={autoRotate ? 'Pause orbit' : 'Auto orbit'} aria-pressed={autoRotate} onClick={() => setAutoRotate(a => !a)}>{autoRotate ? 'Ⅱ' : '▷'} <span>{autoRotate ? 'Pause orbit' : 'Auto orbit'}</span></button><button aria-label="Reset camera" onClick={() => setResetToken(n => n + 1)}>↺</button></div>}</footer>
-    <div className="bottom-line"><span>{SCENE_CONFIG.lockCamera ? 'Move the cursor to look around' : <>Drag to orbit <b>·</b> Scroll to zoom <b>·</b> Right-drag to pan</>}</span><span className="metrics">{ready ? `${ready.meshes} batches · ${Math.round(ready.triangles / 1000)}k triangles · ${stats.calls || '—'} total main + FX draws` : 'Preparing scene'}</span></div>
-    <Loading ready={ready} />
+    <div className="stage">
+      <SceneBoundary>
+        <Canvas shadows frameloop={covered ? 'never' : 'always'} dpr={[1, 1.5]} camera={{ position: KEYS[0].position, fov: KEYS[0].fov, near: 0.5, far: 420 }}
+          gl={{ antialias: true, powerPreference: 'high-performance', toneMapping: THREE.ACESFilmicToneMapping }}
+          onCreated={({ gl }) => { gl.outputColorSpace = THREE.SRGBColorSpace; gl.shadowMap.type = THREE.PCFSoftShadowMap; gl.localClippingEnabled = true; }}
+          fallback={<div className="error-panel"><h2>WebGL is unavailable</h2><p>Open this scene in a browser with hardware acceleration enabled.</p></div>}>
+          <Lighting exposure={exposure} shadows={shadows} mode={mode} />
+          <CityEnvironment />
+          <Suspense fallback={null}>
+            <City onReady={onReady} wireframe={wireframe} />
+            <Places />
+            <SignalStreams />
+            <NiroLogo />
+          </Suspense>
+          <CameraRig onCamera={onCamera} />
+          <Metrics onStats={setStats} />
+          <Atmosphere strength={fogStrength} mode={mode} bloomEnabled={bloomEnabled} logoBloom={logoBloom} logoBloomRadius={logoBloomRadius} />
+        </Canvas>
+      </SceneBoundary>
+      <header><span className="brand"><img src="/niro-mark-white.svg" alt="" /><span className="sr-only">NIRO</span></span></header>
+      <section className="chapters" aria-live="polite">
+        {stages.map((stage, i) => <article key={stage.title} className={i === chapter ? 'active' : ''} aria-hidden={i !== chapter}>
+          <span className="eyebrow">{String(i + 1).padStart(2, '0')} / {stage.title}</span>
+          <h1>{stage.title}<span>.</span></h1>
+          <p>{stage.copy}</p>
+        </article>)}
+      </section>
+      <nav className="rail" aria-label="Story chapters" ref={fill}>
+        {stages.map((stage, i) => <button key={stage.title} aria-current={i === chapter ? 'step' : undefined} onClick={() => goTo(i)}><span>{String(i + 1).padStart(2, '0')}</span><b>{stage.title}</b></button>)}
+      </nav>
+      <button className={`cue ${cue ? 'show' : ''}`} tabIndex={cue ? 0 : -1} aria-hidden={!cue} onClick={() => cue === 'end' ? scrollToTarget(landing.current) : goTo(0)}>
+        {cue === 'end' ? 'Continue into landing page' : 'Scroll to explore'}<i aria-hidden="true" />
+      </button>
+      {debug && <pre className="camera-debug" data-testid="camera-debug">{JSON.stringify(cameraData,null,2)}</pre>}
+      {DEV && <aside className="tools"><button aria-expanded={settings} onClick={() => setSettings(s => !s)} className={settings ? 'active' : ''}>◐ <span>Scene settings</span></button>
+        {settings && <div className="settings"><div className="setting-heading">SCENE SETTINGS</div><label>Light <select value={mode} onChange={e => setMode(e.target.value)}><option value="night">Blue hour</option><option value="day">Daylight</option></select></label><label className="range-label">Exposure <span>{exposure.toFixed(2)}</span><input aria-label="Exposure" type="range" min="0.5" max="2.5" step="0.05" value={exposure} onChange={e => setExposure(Number(e.target.value))} /></label><label className="range-label">Surrounding fog <span>{fogStrength.toFixed(2)}</span><input aria-label="Surrounding fog" type="range" min="0" max="2" step="0.05" value={fogStrength} onChange={e => setFogStrength(Number(e.target.value))} /></label><label>Soft shadows <input type="checkbox" checked={shadows} onChange={e => setShadows(e.target.checked)} /></label><label>Bloom (B)<input type="checkbox" checked={bloomEnabled} onChange={e=>setBloomEnabled(e.target.checked)}/></label><label className="range-label">Energy bloom <span>{logoBloom.toFixed(2)}</span><input aria-label="Energy bloom" type="range" min="0" max="1.5" step=".01" value={logoBloom} onChange={e=>setLogoBloom(+e.target.value)}/></label><label className="range-label">Energy bloom spread <span>{logoBloomRadius.toFixed(2)}</span><input aria-label="Energy bloom spread" type="range" min="0" max="1" step=".01" value={logoBloomRadius} onChange={e=>setLogoBloomRadius(+e.target.value)}/></label><label>Camera debug (D)<input type="checkbox" checked={debug} onChange={e=>setDebug(e.target.checked)}/></label><label>Wireframe <input type="checkbox" checked={wireframe} onChange={e => setWireframe(e.target.checked)} /></label><p>{ready ? `${ready.meshes} batches · ${Math.round(ready.triangles / 1000)}k triangles · ${stats.calls || '—'} main + FX draws` : 'Preparing scene'}</p></div>}
+      </aside>}
+      <Loading ready={ready} />
+    </div>
+    <div className="track" ref={track} style={{ height:`${(STAGES * SCENE_CONFIG.story.scrollPerStage + 1) * 100}vh` }} />
+    {/* Placeholder for the landing page (Chirag); its background matches SCENE_CONFIG.landing so the 3D story blends in. */}
+    <section className="landing" ref={landing} id="landing" style={{ '--landing':SCENE_CONFIG.landing }}>
+      <span className="eyebrow">NIRO</span>
+      <h2>Everything nearby, <span>in one app.</span></h2>
+      <p>Discover businesses, services, events, and opportunities happening around you in real time.</p>
+    </section>
   </main>;
 }
 
 createRoot(document.getElementById('root')).render(<App />);
-
-
-
-

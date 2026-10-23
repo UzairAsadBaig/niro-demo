@@ -1,33 +1,40 @@
-# Dark City - React Three Fiber viewer
+# NIRO — cinematic scroll story (React Three Fiber)
 
-Open OPEN-CITY.html in Chrome or Edge. For development double-click start-viewer.cmd, then visit http://localhost:5173. Keep the terminal open. Existing dev-server users can refresh.
+`npm install`, then `npm run dev` and open http://localhost:5173. `npm run build` creates `dist/`.
 
-Install dependencies with npm install if needed. npm run build creates dist; node make-standalone.mjs refreshes the self-contained viewer.
+## The story
+Scrolling drives a story time `s` from 0 to 5, one unit per storyboard stage:
 
-## Controls
-- 4: Concept Match (32 degree FOV, user-supplied camera position and target).
-- O: reference overlay; opacity control in Scene settings.
-- D: live selectable camera position, lookAt, FOV and marker screen percentages.
-- B: bloom on/off; also available in Scene settings.
-- Orbit, zoom, pan, exposure, daylight, wireframe, shadow and fog controls remain available.
+| s | Stage | What happens |
+|---|-------|--------------|
+| 0–1 | 01 The quiet city | Dormant city, user pulse, slow arrival drift |
+| 1–2 | 02 Signals gather | Blue streams grow from the opportunities and the wider city to the user anchor |
+| 2–3 | 03 NIRO assembles | Streams braid up from the anchor; the icon builds bottom-up from the particles |
+| 3–4 | 04 Intelligence flows | The icon dissolves from its lower edge into return streams; each place lights up when its stream arrives; FT01 drives in |
+| 4–5 | 05 Live Pulse | Three projected labels, quieter streams, then the page hands off to the landing section |
 
-All camera presets and lighting defaults are in src/scene-config.js. Concept Match now uses position [51.627, 34.979, 74.773] and lookAt [17.835, -19.618, 2.294]. The supplied camera readout placed the marker at 47.1% across and 45.9% down; screen percentages depend on viewport aspect ratio. Previous screenshots and verification reports document the earlier preset. Camera and fog configuration, layout, GLB textures and road base color were preserved during this lighting revision.
+Scrolling is smoothed by [Lenis](https://github.com/darkroomengineering/lenis) (skipped when the user prefers reduced motion) and `s` follows it directly. Everything is a pure function of `s`, so reverse scrolling replays the story. All timing, camera keys, anchors, places, routes and particle settings live in `src/scene-config.js`:
+- `story`: copy per stage, scroll length per stage, Lenis smooth-scroll `lerp`, per-stage fog multiplier.
+- `timeline`: story-time windows for each beat.
+- `camera.keys`: position/target/FOV keys on the timeline. The camera follows Catmull-Rom curves through them with a monotone time mapping, so it never stops at a key. Portrait screens use `mobileTarget`/`mobileDistance`.
+- `anchors`, `places`, `ft01`, `routes`, `streams`.
 
-## Lighting refinement
-Bloom is explicitly restricted to instanced lamp bulb cores, the street-lamp emissive material and the cyan marker. Buildings, shopfronts, food trucks, windows, facades and road pools render black or are hidden in the bloom source pass while opaque geometry still occludes sources. No brightness-threshold fallback is used for buildings.
+## Model updates (designer GLBs)
+`public/dark-city.glb` can be replaced without code changes. When present in the GLB (spec §9 names), these override the config:
+- `Anchor_User`, `Anchor_NIRO_Assemble`, `Anchor_Restaurant_01`, `Anchor_Service_01`, `Anchor_Event_01`, `Anchor_FoodTruckPark_01`: marker, label and stream endpoints. Place props (trucks, tables, signs) come only from the GLB.
+- `Path_Source_<Name>` / `Path_Return_<Name>` (route ids are in `routes`): either a parent of ordered empties or a polyline mesh.
+- `FT01_Mobile_Root` (moved along `Path_FT01_A_to_B`, or `ft01.from/to`). Until it exists there is no moving truck, FT01 marker or FT01 return stream.
+- Inside each place's `zones`, props using the `dormant.materials` stay dark and desaturated with their emission off until the place activates, then return to full colour with their emission boosted. Emission strength per designer material is `emission` in the config. This is position based, so merged or renamed meshes keep working.
 
-Final settings:
-- Bloom: strength 0.30, radius 0.18, threshold 0.25; full-resolution separable Gaussian blur.
-- Facade window emissive intensity: 0.75. Prop emission: 1.1. Existing unlit windows remain unlit.
-- Bulb sprite diameter: 0.36 world units; alpha multiplier 0.32; compact exponential core/falloff.
-- Road pools: shared 512x512 RGBA radial texture, bilinear/trilinear filtering, zero alpha at the entire boundary; radius 1.45 world units and peak opacity 0.105 for regular lamps. Market lanterns: radius 1.25, opacity 0.10. Shop spill: opacity 0.055; truck spill: 0.065. All pools share one instanced draw.
-- Nearby point lights: at most four, intensity 18, distance 6, no point-light shadows.
-- ACES Filmic, exposure 1.55; half-float HDR scene/emission/blur targets; 4x MSAA on scene and emission; output dither 0.6/255 peak-to-peak.
+`public/niro-logo.glb`: every mesh is treated as one icon part. When the four official components are shipped as separate meshes, they fly together during assembly.
 
-The viewer suppresses the old broad ground emissive map and replaces it with localized pools. Base color, roughness and normal textures are unchanged. These are runtime viewer changes; loading the GLB alone does not include the new pool shaders or selective bloom.
+## Rendering notes
+- Signal streams (`SignalStreams.jsx`): about 56k GPU particles in one draw. Routes are baked into a float texture; each particle flows along its route in a braided tube, with hot leading edges, halo strays and bokeh motes. Each route gets a head/tail window from story time.
+- An energy pass (`Atmosphere.jsx`) renders the icon glow face, particles and Aqua markers over a black, alpha-0 copy of the city, so their wide bloom is occluded by buildings. Street lamps and warm interiors keep the narrow selective bloom.
+- Live Pulse labels are DOM overlays (drei `Html`), outside WebGL tone mapping.
+- Rendering stops once the landing section fully covers the canvas.
 
-## Verification and budget
-Chrome WebGL checks passed without JavaScript/shader errors. All camera presets, O/D/B shortcuts, wireframe and shadow controls were exercised. lighting-verification.json records the bloom whitelist and comparison: Concept Match has 82 draws with bloom, 41 with bloom disabled; overview has 74 with bloom. Shadow passes are excluded. Model: 34 primitives, 3 materials, 153,872 triangles. These draw counts are not an FPS guarantee; full-resolution HDR bloom increases framebuffer memory and fill cost.
-
-Screenshots include preview-concept.png, preview-bloom-off.png, preview-market.png and the overview/neighborhood views. The standalone file embeds the model and reference image. Start the development server from your desktop session if you want desktop-accessible localhost; the package does not claim an always-running server.
-
+## Dev tools
+- `?dev` shows the scene settings panel (exposure, fog, bloom, shadows, wireframe, draw counts).
+- `D` toggles the camera readout (story time, position, lookAt, FOV) for tuning `camera.keys`.
+- `B` toggles bloom. `window.__story.jump(s)` jumps the story from the console.
