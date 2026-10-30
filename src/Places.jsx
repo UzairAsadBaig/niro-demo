@@ -81,6 +81,17 @@ export function Places() {
     // FT01 (the moving truck) only exists once the GLB ships FT01_Mobile_Root; until then it has no marker, light or route.
     const glbTruck = world.nodes.FT01_Mobile_Root;
     const zones = dormancy(world.scene, places);
+    const windows = new Set();
+    world.scene.traverse(o => { if (o.isMesh) for (const m of [o.material].flat()) if (C.windows.materials.test(m.name)) windows.add(m); });
+    const characters = new Set();
+    world.scene.traverse(o => { if (o.isMesh) for (const m of [o.material].flat()) if (C.characters.materials.test(m.name)) characters.add(m); });
+    // Hanging string lights share the lamp material, so each gets its own copy to fade with its place.
+    const strings = [];
+    for (const p of places) if (p.hanging) world.scene.traverse(o => {
+      if (!o.isMesh || o.material.name !== 'Emission' || !p.hanging.test(o.parent.name)) return; // multi-material GLB nodes load as a group of meshes
+      o.material = o.material.clone(); o.material.emissive.set(L.lampColor);
+      strings.push({ material:o.material, place:p.id });
+    });
     // Inner glow: a warm light inside each matching designer node or material (the stage, truck tubes), on with activation.
     const glows = [];
     for (const p of places) if (p.glow) world.scene.traverse(o => {
@@ -96,7 +107,7 @@ export function Places() {
     const markerMaterial = new THREE.ShaderMaterial({ vertexShader:markerVertex, fragmentShader:markerFragment, transparent:true, depthWrite:false,
       blending:THREE.CustomBlending, blendSrc:THREE.OneFactor, blendDst:THREE.OneFactor, blendSrcAlpha:THREE.ZeroFactor, blendDstAlpha:THREE.OneFactor,
       uniforms:{ color:{ value:new THREE.Color(C.aqua).multiplyScalar(3) }, scale:{ value:1 } } });
-    return { places, glbTruck, zones, glows, markerCount, markerGeometry:mg, markerMaterial, pools:poolMaterial() };
+    return { places, glbTruck, zones, glows, strings, windows, characters, markerCount, markerGeometry:mg, markerMaterial, pools:poolMaterial() };
   }, [world]);
   useEffect(() => () => { built.markerGeometry.dispose(); built.markerMaterial.dispose(); built.pools.dispose(); }, [built]);
 
@@ -110,6 +121,11 @@ export function Places() {
     built.zones.owner.forEach((id, i) => { built.zones.uZones.value[i].w = act[id]; });
     places.forEach((p, i) => { if (lights.current[i]) lights.current[i].intensity = L.placeLight * act[p.id]; });
     built.glows.forEach((g, i) => { if (glowRefs.current[i]) glowRefs.current[i].intensity = g.intensity * act[g.place]; });
+    const W = C.windows, warm = W.dim + (1 - W.dim) * ease(ramp(s, W.ramp));
+    built.windows.forEach(m => { m.emissiveIntensity = C.emission[m.name] * warm; });
+    const K = C.characters, lum = K.dim + (1 - K.dim) * ease(ramp(s, K.ramp));
+    built.characters.forEach(m => m.color.setScalar(lum));
+    built.strings.forEach(h => { h.material.emissiveIntensity = C.emission.Emission * act[h.place]; });
     // FT01 drives along its path.
     const drive = ft01At(s, world), live = ft01Live(s, world);
     if (glbTruck) { glbTruck.position.copy(drive.position); glbTruck.rotation.y = drive.heading; }

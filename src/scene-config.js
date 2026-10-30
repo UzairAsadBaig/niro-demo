@@ -56,21 +56,26 @@ export const SCENE_CONFIG = {
     { id:'Restaurant_01', kind:'restaurant', facing:0, zones:[[-19.8,2.4,8]], label:'Lunch Deal · 0.4 mi', labelSide:-1, light:'#ffb86b',
       lamp:[0,2.6,-2.6], pool:[0,-2.6,3.6] }, // over the terrace tables (local to the anchor)
     { id:'Service_01', kind:'service', facing:-Math.PI/2, zones:[[2.5,2,6.5],[-.2,-19.7,6]], label:'Service Open Now', labelSide:-1, narrowLift:32, light:'#ffb86b' },
-    { id:'Event_01', kind:'event', facing:-Math.PI/2, zones:[[34.1,.6,8]], label:'Event Starts in 12m', labelSide:1, light:'#ffd19a', wash:['#6A8EFE', 5],
+    { id:'Event_01', kind:'event', facing:-Math.PI/2, zones:[[34.1,.6,8]], label:'Event Starts in 12m', labelSide:1, light:'#ffd19a', wash:['#6A8EFE', 5], hanging:/^Event_Lights$/,
       glow:{ nodes:/^musical_Cencert$/, color:'#9CB4FE', intensity:120, distance:14, height:2.4 } },
-    { id:'FoodTruckPark_01', kind:'trucks', facing:0, zones:[[8.9,18.4,13],[-6.5,18.2,9],[-19,18,9.8]], label:'4 Food Trucks Live', labelSide:1, light:'#ffb86b',
+    { id:'FoodTruckPark_01', kind:'trucks', facing:0, zones:[[8.9,18.4,13],[-6.5,18.2,9],[-19,18,9.8]], label:'4 Food Trucks Live', labelSide:1, light:'#ffb86b', hanging:/^Lights1?$/,
       glow:{ material:/^Truck_Inside_Light$/, color:'#ffc27d', intensity:5, distance:3.2, height:-.35 } }, // soft fill under each tube light
   ],
   // `narrowLift` (px): raises the label above its neighbours on phone-width screens.
   // `glow`: a light inside each GLB node matching `nodes`, or each mesh using `material` (the stage, the truck tube lights),
   // `height` above the node's bottom; on with the place's activation.
   // `lamp` [x, y, z] / `pool` [x, z, radius]: activation light and ground glow, local to the anchor (front = +z).
+  // `hanging`: GLB meshes of festoon string lights; unlit until the place activates (street lamps outside place zones stay lit).
   // `wash`: [colour, intensity] light wash over the props in the zone once active (the lit stage).
   // Dormant look inside place zones (stage 1 reads as the dark concept city): lit brightness, albedo saturation, the
   // remaining share of emission (shop interiors, truck windows, lamps) and the emission boost once active.
   dormant:{ materials:/^(Buildings_Mat|stylized bush|Plant_1_Mat|Plant_3_Mat|Plant_Big_Mat|Tall_Buildings_Mat|Shops_Interior_Mat|Vehicle_Window_Emission|Truck_Inside_Light|Signs_Mat|Emission|Palette256)$/, brightness:.32, saturation:.3, emission:0, glow:1.8 },
   // Emission strength per designer material (their emission textures): city windows, shop interiors, truck windows, signs, lamps.
   emission:{ Buildings_Mat:1.9, Tall_Buildings_Mat:2.4, Shops_Interior_Mat:1.4, Vehicle_Window_Emission:1.2, Truck_Inside_Light:2.2, Signs_Mat:1.5, Emission:4 },
+  // City windows start dim and warm up to `emission` over story time `ramp` (`dim` = starting share of the strength).
+  windows:{ materials:/^(Buildings_Mat|Tall_Buildings_Mat)$/, dim:.2, ramp:[.6, 3.9] },
+  // Characters start dark (`dim` = starting albedo multiplier) so they sit in the night scene, then brighten over `ramp`.
+  characters:{ materials:/^(Char_Mat|Male_V1_Shirt_Mat|Male_V2_Shirt_Mat)$/, dim:.3, ramp:[.6, 3.9] },
   // Emission colour overrides per designer material (their export is plain white): warm tube lights inside the trucks.
   emissionColor:{ Truck_Inside_Light:'#ffd29a' },
   // FT01, the moving truck: shown only once the GLB ships FT01_Mobile_Root (moved along Path_FT01_A_to_B, or from → to).
